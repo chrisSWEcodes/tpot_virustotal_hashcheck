@@ -24,6 +24,7 @@ If you'd like the script to execute at a regular interval, use crontab -e as the
 0 */3 * * * /usr/bin/python3 /home/tpotuser/checkhash/checkhash.py
 To have it executed every three hours.
 
-
+Disclaimer:
+The script is provided as-is and may be full of holes. Although, probably not. Maybe just sharks.
 
 Happy fishing!
