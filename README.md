@@ -23,4 +23,10 @@ Visit the URL https://api.telegram.org/bot<your_bot_token>/getUpdates (replace <
 Look for the chat object in the response JSON and note the id (this is your chat_id).
 Update the config file.
 
-Happy hunting!
+If you'd like the script to execute at a regular interval, use crontab -e as the user for tpot and input, for example:
+0 */3 * * * /usr/bin/python3 /home/tpotuser/checkhash/checkhash.py
+To have it executed every three hours.
+
+
+
+Happy fishing!
