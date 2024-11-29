@@ -1,6 +1,6 @@
 # TPOT VirusTotal hashcheck
 
-The script will check the md5 hashsum from harvested malware in the Deutsche Telekom TPOT and notify you via telegram ans also upload it if it's not found there.
+The script will check the md5 hashsum from harvested malware in the Deutsche Telekom TPOT and notify you via telegram and also upload it if it's not found there.
 
 It will also log some aspects, check inside compressed files and not bother the VT api twice for the same hash.
 
