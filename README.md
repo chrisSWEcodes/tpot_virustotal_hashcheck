@@ -4,7 +4,7 @@ The script will check the md5 hashsum from harvested malware in the Deutsche Tel
 
 It will also log some aspects, check inside compressed files and not bother the VT api twice for the same hash.
 
-Sign up for a free API ket here:
+Sign up for a free account and API key here:
 https://www.virustotal.com/
 
 Get the awesome T-POT from here:
