@@ -1,11 +1,14 @@
 {
   "virustotal_api_key": "your_virustotal_api_key",
+  "_comment": "Usually the below would be something like /home/tpotuser/tpotce/data",
   "scan_directory": "/path/to/scan",
+  "_comment": "Usually the below would be something like "tty" and "cache",
   "exclude_directories": ["/path/to/exclude1", "/path/to/exclude2"],
-  "log_directory": "/path/to/logs",
+  "log_directory": "./logs",
   "enable_virustotal_check": true,
   "verbose_logging": true,
   "telegram_settings": {
+    "_comment": "Enter your Telegram bot token and chat ID below.",
     "bot_token": "your_bot_token",
     "chat_id": "your_chat_id"
   }
