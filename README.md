@@ -11,13 +11,10 @@ Get the awesome T-POT from here:
 https://github.com/telekom-security/tpotce
 
 Steps to Set Up Telegram Bot Notifications
-Create a Telegram Bot:
-
 Open Telegram and search for the BotFather.
 Start a chat with BotFather and send the command /newbot.
 Follow the instructions to create your bot and get the bot token.
 Get Your Chat ID:
-
 Open a chat with your bot in Telegram and send any message.
 Visit the URL https://api.telegram.org/bot<your_bot_token>/getUpdates (replace <your_bot_token> with your actual token).
 Look for the chat object in the response JSON and note the id (this is your chat_id).
