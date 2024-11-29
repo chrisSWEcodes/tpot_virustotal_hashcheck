@@ -7,6 +7,9 @@ It will also log some aspects, check inside compressed files and not bother the 
 Sign up for a free API ket here:
 https://www.virustotal.com/
 
+Get the awesome T-POT from here:
+https://github.com/telekom-security/tpotce
+
 Steps to Set Up Telegram Bot Notifications
 Create a Telegram Bot:
 
