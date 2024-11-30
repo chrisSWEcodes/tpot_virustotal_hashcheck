@@ -4,6 +4,7 @@ import hashlib
 import requests
 import logging
 from datetime import datetime
+import tarfile
 
 # Load configuration
 with open("config.json", "r") as config_file:
@@ -43,18 +44,66 @@ def format_file_size(size_bytes):
     else:
         return f"{size_bytes / 1024 ** 3:.2f} GB"
 
-def send_telegram_notification(new_hashes):
-    """Send a Telegram notification with new hashes."""
+def calculate_checksum(file_path):
+    """Calculate the checksum of a file using SHA256."""
+    hash_func = hashlib.sha256()
     try:
-        message = "The following hashes were not found on VirusTotal and were uploaded:\n\n" + "\n".join(new_hashes)
-        url = f"https://api.telegram.org/bot{TELEGRAM_SETTINGS['bot_token']}/sendMessage"
-        response = requests.post(url, data={"chat_id": TELEGRAM_SETTINGS["chat_id"], "text": message})
-        if response.status_code == 200:
-            logging.info("Telegram notification sent successfully!")
-        else:
-            logging.error(f"Failed to send Telegram notification. Status code: {response.status_code}, Response: {response.text}")
+        with open(file_path, "rb") as f:
+            while chunk := f.read(8192):
+                hash_func.update(chunk)
+        return hash_func.hexdigest()
     except Exception as e:
-        logging.error(f"Error sending Telegram notification: {e}")
+        logging.error(f"Error calculating checksum for {file_path}: {e}")
+        return None
+
+def load_processed_hashes():
+    """Load previously processed hashes into a set."""
+    processed_hashes = set()
+    if os.path.exists(PROCESSED_HASHES_FILE):
+        with open(PROCESSED_HASHES_FILE, "r") as file:
+            for line in file:
+                parts = line.strip().split(";")
+                if len(parts) > 1:  # Assuming second column is the hash
+                    processed_hashes.add(parts[1])
+    return processed_hashes
+
+def load_archive_history():
+    """Load archive history into a dictionary."""
+    archive_history = {}
+    if os.path.exists(ARCHIVE_HISTORY_FILE):
+        with open(ARCHIVE_HISTORY_FILE, "r") as file:
+            for line in file:
+                parts = line.strip().split(";")
+                if len(parts) == 2:  # Assuming format: path;checksum
+                    archive_history[parts[0]] = parts[1]
+    return archive_history
+
+def save_archive_history(archive_history):
+    """Save the current archive history to a log file."""
+    try:
+        with open(ARCHIVE_HISTORY_FILE, "w") as file:
+            for path, checksum in archive_history.items():
+                file.write(f"{path};{checksum}\n")
+    except Exception as e:
+        logging.error(f"Error saving archive history: {e}")
+
+def should_process_archive(file_path, archive_history):
+    """
+    Check if an archive file should be processed.
+    Compares its current checksum with the stored one.
+    """
+    current_checksum = calculate_checksum(file_path)
+    if current_checksum is None:
+        return False  # Skip processing if checksum calculation fails
+
+    previous_checksum = archive_history.get(file_path)
+    if current_checksum != previous_checksum:
+        logging.info(f"Archive {file_path} has changed (checksum mismatch).")
+        archive_history[file_path] = current_checksum  # Update history
+        return True
+    else:
+        logging.info(f"Archive {file_path} has not changed.")
+        return False
 
 def query_virustotal(hash_value):
     """Query the VirusTotal API for a given hash and extract relevant fields."""
@@ -91,18 +140,6 @@ def query_virustotal(hash_value):
         logging.error(f"Error querying VirusTotal for hash {hash_value}: {e}")
         return None
 
-def calculate_checksum(file_path):
-    """Calculate the checksum of a file using SHA256."""
-    hash_func = hashlib.sha256()
-    try:
-        with open(file_path, "rb") as f:
-            while chunk := f.read(8192):
-                hash_func.update(chunk)
-        return hash_func.hexdigest()
-    except Exception as e:
-        logging.error(f"Error calculating checksum for {file_path}: {e}")
-        return None
-
 def save_processed_hash(hash_value, folder_path, file_size, vt_data):
     """Save processed hash information to the log file."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -119,6 +156,43 @@ def save_processed_hash(hash_value, folder_path, file_size, vt_data):
     with open(PROCESSED_HASHES_FILE, "a") as f:
         f.write(log_entry)
 
+def extract_and_process_archive(file_path, new_hashes, processed_hashes):
+    """Extract and process files from an archive."""
+    try:
+        with tarfile.open(file_path, "r:gz") as tar:
+            tar.extractall(path=SCAN_DIR)
+            for member in tar.getmembers():
+                if member.isfile():
+                    extracted_file_path = os.path.join(SCAN_DIR, member.name)
+                    logging.debug(f"Processing extracted file: {extracted_file_path}")
+                    hash_value = os.path.basename(extracted_file_path)
+                    if len(hash_value) == 32 and all(c in "0123456789abcdef" for c in hash_value):
+                        process_file(hash_value, extracted_file_path, os.path.dirname(extracted_file_path), new_hashes, processed_hashes)
+    except Exception as e:
+        logging.error(f"Error extracting archive {file_path}: {e}")
+
+def process_file(hash_value, file_path, folder_path, new_hashes, processed_hashes):
+    """Process a single file hash."""
+    if hash_value in processed_hashes:
+        logging.info(f"Hash {hash_value} already processed. Skipping.")
+        return
+
+    logging.debug(f"Processing hash: {hash_value}, Full path: {file_path}")
+    file_size = os.path.getsize(file_path)
+
+    if ENABLE_CHECK:
+        vt_data = query_virustotal(hash_value)
+        if vt_data and vt_data["found"]:
+            save_processed_hash(hash_value, folder_path, format_file_size(file_size), vt_data)
+        elif vt_data and not vt_data["found"]:
+            save_processed_hash(hash_value, folder_path, format_file_size(file_size), vt_data)
+            save_new_hash(hash_value, folder_path, format_file_size(file_size))
+            new_hashes.append(hash_value)
+        else:
+            logging.error(f"Error processing hash {hash_value}. Could not retrieve data from VirusTotal.")
+    else:
+        logging.info(f"Skipped VirusTotal check for hash: {hash_value}")
+
 def save_new_hash(hash_value, folder_path, file_size):
     """Save new hash to new_hashes.log for notification."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -128,31 +202,11 @@ def save_new_hash(hash_value, folder_path, file_size):
         f.write(entry)
     return entry  # Return the entry for notifications
 
-def process_file(hash_value, file_path, folder_path, new_hashes, processed_hashes):
-    """Process a single file hash."""
-    if hash_value in processed_hashes:
-        logging.info(f"Hash {hash_value} already processed. Skipping.")
-        return
-
-    file_size = os.path.getsize(file_path)
-
-    if ENABLE_CHECK:
-        vt_data = query_virustotal(hash_value)
-        if vt_data and vt_data["found"]:
-            save_processed_hash(hash_value, folder_path, format_file_size(file_size), vt_data)
-        elif vt_data and not vt_data["found"]:
-            save_processed_hash(hash_value, folder_path, format_file_size(file_size), vt_data)
-            new_hashes.append(f"{hash_value};{folder_path};{format_file_size(file_size)}")
-            save_new_hash(hash_value, folder_path, format_file_size(file_size))
-        else:
-            logging.error(f"Error processing hash {hash_value}. Could not retrieve data from VirusTotal.")
-    else:
-        logging.info(f"Skipped VirusTotal check for hash: {hash_value}")
-
 def process_files():
-    """Process all files in the directory."""
+    """Process all files and specific archives in the directory."""
     new_hashes = []
-    processed_hashes = set()
+    processed_hashes = load_processed_hashes()
+    archive_history = load_archive_history()
 
     for root, _, files in os.walk(SCAN_DIR):
         if os.path.abspath(root) in EXCLUDE_DIRS:
@@ -161,10 +215,13 @@ def process_files():
 
         for file_name in files:
             file_path = os.path.join(root, file_name)
-
-            if len(file_name) == 32 and all(c in "0123456789abcdef" for c in file_name):
-                logging.info(f"Processing hash: {file_name} (Path: {file_path})")
+            if file_name in ["downloads.tgz", "binaries.tgz"]:  # Restrict to specific archives
+                if should_process_archive(file_path, archive_history):
+                    extract_and_process_archive(file_path, new_hashes, processed_hashes)
+            elif len(file_name) == 32 and all(c in "0123456789abcdef" for c in file_name):
                 process_file(file_name, file_path, root, new_hashes, processed_hashes)
+
+    save_archive_history(archive_history)
 
     if new_hashes:
         send_telegram_notification(new_hashes)
