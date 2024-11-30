@@ -21,7 +21,7 @@ Look for the chat object in the response JSON and note the id (this is your chat
 Update the config file.
 
 If you'd like the script to execute at a regular interval, use crontab -e as the user for tpot and input, for example:
-0 */3 * * * /usr/bin/python3 /home/tpotuser/checkhash/checkhash.py
+cd /home/tpotuser/checkhash && /usr/bin/python3 /home/tpotuser/checkhash/checkhash.py
 To have it executed every three hours.
 
 Disclaimer:
