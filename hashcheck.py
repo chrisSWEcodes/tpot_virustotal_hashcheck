@@ -1,5 +1,6 @@
 import os
 import json
+import hashlib
 import requests
 import logging
 from datetime import datetime
@@ -18,6 +19,7 @@ TELEGRAM_SETTINGS = config["telegram_settings"]  # Telegram bot settings
 
 PROCESSED_HASHES_FILE = os.path.join(LOG_DIR, "processed_hashes.log")
 NEW_HASHES_FILE = os.path.join(LOG_DIR, "new_hashes.log")
+ARCHIVE_HISTORY_FILE = os.path.join(LOG_DIR, "archive_history.log")
 
 # Ensure log directory exists
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -41,16 +43,18 @@ def format_file_size(size_bytes):
     else:
         return f"{size_bytes / 1024 ** 3:.2f} GB"
 
-def load_processed_hashes():
-    """Load previously processed hashes into a set."""
-    processed_hashes = set()
-    if os.path.exists(PROCESSED_HASHES_FILE):
-        with open(PROCESSED_HASHES_FILE, "r") as file:
-            for line in file:
-                parts = line.strip().split(";")
-                if len(parts) > 1:  # Assuming second column is the hash
-                    processed_hashes.add(parts[1])
-    return processed_hashes
+def send_telegram_notification(new_hashes):
+    """Send a Telegram notification with new hashes."""
+    try:
+        message = "The following hashes were not found on VirusTotal and were uploaded:\n\n" + "\n".join(new_hashes)
+        url = f"https://api.telegram.org/bot{TELEGRAM_SETTINGS['bot_token']}/sendMessage"
+        response = requests.post(url, data={"chat_id": TELEGRAM_SETTINGS["chat_id"], "text": message})
+        if response.status_code == 200:
+            logging.info("Telegram notification sent successfully!")
+        else:
+            logging.error(f"Failed to send Telegram notification. Status code: {response.status_code}, Response: {response.text}")
+    except Exception as e:
+        logging.error(f"Error sending Telegram notification: {e}")
 
 def query_virustotal(hash_value):
     """Query the VirusTotal API for a given hash and extract relevant fields."""
@@ -59,6 +63,10 @@ def query_virustotal(hash_value):
 
     try:
         response = requests.get(url, headers=headers)
+        logging.debug(f"VirusTotal request URL: {url}")
+        logging.debug(f"VirusTotal response status: {response.status_code}")
+        logging.debug(f"VirusTotal response body: {response.text}")
+
         if response.status_code == 200:
             data = response.json().get("data", {}).get("attributes", {})
             yara_results = data.get("crowdsourced_yara_results", [])
@@ -83,33 +91,17 @@ def query_virustotal(hash_value):
         logging.error(f"Error querying VirusTotal for hash {hash_value}: {e}")
         return None
 
-def upload_file_to_virustotal(file_path):
-    """Upload a file to VirusTotal."""
-    url = "https://www.virustotal.com/api/v3/files"
-    headers = {"x-apikey": API_KEY}
+def calculate_checksum(file_path):
+    """Calculate the checksum of a file using SHA256."""
+    hash_func = hashlib.sha256()
     try:
-        with open(file_path, "rb") as file:
-            files = {"file": file}
-            response = requests.post(url, headers=headers, files=files)
-            if response.status_code == 200:
-                logging.info(f"File {file_path} uploaded to VirusTotal.")
-            else:
-                logging.error(f"Failed to upload file {file_path}. HTTP Status Code: {response.status_code}")
+        with open(file_path, "rb") as f:
+            while chunk := f.read(8192):
+                hash_func.update(chunk)
+        return hash_func.hexdigest()
     except Exception as e:
-        logging.error(f"Error uploading file {file_path} to VirusTotal: {e}")
-
-def send_telegram_notification(new_hashes):
-    """Send a Telegram notification with new hashes."""
-    try:
-        message = "The following hashes were not found on VirusTotal and were uploaded:\n\n" + "\n".join(new_hashes)
-        url = f"https://api.telegram.org/bot{TELEGRAM_SETTINGS['bot_token']}/sendMessage"
-        response = requests.post(url, data={"chat_id": TELEGRAM_SETTINGS["chat_id"], "text": message})
-        if response.status_code == 200:
-            logging.info("Telegram notification sent successfully!")
-        else:
-            logging.error(f"Failed to send Telegram notification. Status code: {response.status_code}, Response: {response.text}")
-    except Exception as e:
-        logging.error(f"Error sending Telegram notification: {e}")
+        logging.error(f"Error calculating checksum for {file_path}: {e}")
+        return None
 
 def save_processed_hash(hash_value, folder_path, file_size, vt_data):
     """Save processed hash information to the log file."""
@@ -128,7 +120,7 @@ def save_processed_hash(hash_value, folder_path, file_size, vt_data):
         f.write(log_entry)
 
 def save_new_hash(hash_value, folder_path, file_size):
-    """Save new hash to new_hashes.log for email notification."""
+    """Save new hash to new_hashes.log for notification."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     entry = f"{timestamp};{hash_value};{folder_path};{file_size};Not found\n"
 
@@ -142,26 +134,25 @@ def process_file(hash_value, file_path, folder_path, new_hashes, processed_hashe
         logging.info(f"Hash {hash_value} already processed. Skipping.")
         return
 
-    file_size = format_file_size(os.path.getsize(file_path))
+    file_size = os.path.getsize(file_path)
 
     if ENABLE_CHECK:
         vt_data = query_virustotal(hash_value)
         if vt_data and vt_data["found"]:
-            save_processed_hash(hash_value, folder_path, file_size, vt_data)
+            save_processed_hash(hash_value, folder_path, format_file_size(file_size), vt_data)
         elif vt_data and not vt_data["found"]:
-            save_new_hash(hash_value, folder_path, file_size)
-            save_processed_hash(hash_value, folder_path, file_size, vt_data)
-            new_hashes.append(f"{hash_value};{folder_path};{file_size};Not found")
-            upload_file_to_virustotal(file_path)
+            save_processed_hash(hash_value, folder_path, format_file_size(file_size), vt_data)
+            new_hashes.append(f"{hash_value};{folder_path};{format_file_size(file_size)}")
+            save_new_hash(hash_value, folder_path, format_file_size(file_size))
         else:
-            logging.info(f"Hash {hash_value} could not be processed.")
+            logging.error(f"Error processing hash {hash_value}. Could not retrieve data from VirusTotal.")
     else:
         logging.info(f"Skipped VirusTotal check for hash: {hash_value}")
 
 def process_files():
     """Process all files in the directory."""
     new_hashes = []
-    processed_hashes = load_processed_hashes()
+    processed_hashes = set()
 
     for root, _, files in os.walk(SCAN_DIR):
         if os.path.abspath(root) in EXCLUDE_DIRS:
